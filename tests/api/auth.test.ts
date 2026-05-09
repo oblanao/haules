@@ -86,7 +86,7 @@ describe("POST /api/auth/logout", () => {
     expect(jar.has("haules_session")).toBe(true);
 
     const { POST } = await import("@/app/api/auth/logout/route");
-    const res = await POST(makeRequest("http://t/api/auth/logout", { method: "POST" }));
+    const res = await POST();
     expect(res.status).toBe(200);
     expect(jar.has("haules_session")).toBe(false);
   });
