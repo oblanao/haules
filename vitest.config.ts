@@ -7,7 +7,7 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     globals: false,
     pool: "forks",
-    singleFork: true,
+    fileParallelism: false,
     setupFiles: ["./tests/support/setup.ts"],
   },
   resolve: {
