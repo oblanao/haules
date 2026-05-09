@@ -1,6 +1,6 @@
 import { and, asc, desc, eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db/client";
-import { anthropic, MODELS } from "./anthropic";
+import { openrouter, modelForAsk } from "./openrouter";
 import { renderProfile } from "./profile-render";
 
 const SYSTEM = `You are Haules, a thoughtful travel concierge. You answer the user's questions using their travel profile (provided below) to make answers feel personally tailored.
@@ -30,18 +30,19 @@ export async function ensureThreadOwned(userId: string, threadId: string) {
   return !!t;
 }
 
-export function buildSystemBlock(profileText: string) {
-  return [
-    { type: "text" as const, text: SYSTEM, cache_control: { type: "ephemeral" as const } },
-    { type: "text" as const, text: profileText },
-  ];
+export function buildSystemBlock(profileText: string): string {
+  return `${SYSTEM}\n\n${profileText}`;
 }
 
-export function streamAsk(systemBlocks: ReturnType<typeof buildSystemBlock>, history: { role: "user" | "assistant"; content: string }[], userMessage: string) {
-  return anthropic().messages.stream({
-    model: MODELS.ask,
+export function streamAsk(systemContent: string, history: { role: "user" | "assistant"; content: string }[], userMessage: string) {
+  return openrouter().chat.completions.create({
+    model: modelForAsk(),
     max_tokens: 1500,
-    system: systemBlocks,
-    messages: [...history, { role: "user", content: userMessage }],
+    stream: true,
+    messages: [
+      { role: "system", content: systemContent },
+      ...history,
+      { role: "user", content: userMessage },
+    ],
   });
 }

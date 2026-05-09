@@ -25,10 +25,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ threadId: stri
 
   const ctxData = await loadAskContext(user.id, threadId);
   const profileText = renderProfile(ctxData.profile);
-  const sys = buildSystemBlock(profileText);
+  const systemContent = buildSystemBlock(profileText);
   const history = ctxData.messages.filter((m) => m.role === "user" || m.role === "assistant").map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
   // user message we just inserted is now last in DB; exclude here since we pass it explicitly
-  const stream = streamAsk(sys, history.slice(0, -1), parsed.data.message);
+  const stream = await streamAsk(systemContent, history.slice(0, -1), parsed.data.message);
 
   // If thread has no title, set one based on first user message (truncate).
   if (history.length === 0) {
@@ -42,10 +42,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ threadId: stri
   const body = new ReadableStream({
     async start(controller) {
       try {
-        for await (const event of stream) {
-          if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-            assembled += event.delta.text;
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ delta: event.delta.text })}\n\n`));
+        for await (const chunk of stream) {
+          const delta = chunk.choices[0]?.delta?.content ?? "";
+          if (delta) {
+            assembled += delta;
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ delta })}\n\n`));
           }
         }
         const { visible, citations } = extractCitations(assembled);

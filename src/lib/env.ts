@@ -2,7 +2,9 @@ import { z } from "zod";
 
 const envSchema = z.object({
   DATABASE_URL: z.string().url(),
-  ANTHROPIC_API_KEY: z.string().min(1),
+  OPENROUTER_API_KEY: z.string().min(1),
+  OPENROUTER_MODEL_QUESTION: z.string().min(1).default("anthropic/claude-haiku-4.5"),
+  OPENROUTER_MODEL_ASK: z.string().min(1).default("anthropic/claude-sonnet-4.6"),
   SESSION_SECRET: z.string().min(32, "SESSION_SECRET must be at least 32 chars"),
   RATE_LIMIT_QUESTIONS_PER_DAY: z.coerce.number().int().positive().default(200),
   RATE_LIMIT_CHAT_MESSAGES_PER_DAY: z.coerce.number().int().positive().default(100),

@@ -4,11 +4,13 @@ import { db, schema } from "@/lib/db/client";
 
 setupTestDb();
 
-vi.mock("@anthropic-ai/sdk", () => {
+vi.mock("openai", () => {
   return {
-    default: class MockAnthropic {
-      messages = {
-        create: vi.fn(),
+    default: class MockOpenAI {
+      chat = {
+        completions: {
+          create: vi.fn(),
+        },
       };
       constructor() {}
     },
@@ -29,12 +31,12 @@ async function makeUser() {
 describe("askNextQuestion", () => {
   it("returns a parsed question payload from a tool_use response", async () => {
     const create = vi.fn().mockResolvedValue({
-      stop_reason: "tool_use",
-      content: [{ type: "tool_use", name: "ask_next_question", input: { type: "free_text", prompt: "Best memory?" } }],
+      choices: [{ message: { tool_calls: [{ id: "x", type: "function", function: { name: "ask_next_question", arguments: '{"type":"free_text","prompt":"Best memory?"}' } }] } }],
     });
-    vi.doMock("@/lib/llm/anthropic", () => ({
-      anthropic: () => ({ messages: { create } }),
-      MODELS: { question: "claude-haiku-4-5", ask: "claude-sonnet-4-6" },
+    vi.doMock("@/lib/llm/openrouter", () => ({
+      openrouter: () => ({ chat: { completions: { create } } }),
+      modelForQuestion: () => "test/model-question",
+      modelForAsk: () => "test/model-ask",
       withRetry: <T>(fn: () => Promise<T>) => fn(),
     }));
 
@@ -47,11 +49,12 @@ describe("askNextQuestion", () => {
 
   it("retries once on a malformed payload before returning valid result", async () => {
     const create = vi.fn()
-      .mockResolvedValueOnce({ stop_reason: "tool_use", content: [{ type: "tool_use", name: "ask_next_question", input: { type: "bogus" } }] })
-      .mockResolvedValueOnce({ stop_reason: "tool_use", content: [{ type: "tool_use", name: "ask_next_question", input: { type: "true_false", statement: "I love nature" } }] });
-    vi.doMock("@/lib/llm/anthropic", () => ({
-      anthropic: () => ({ messages: { create } }),
-      MODELS: { question: "claude-haiku-4-5", ask: "claude-sonnet-4-6" },
+      .mockResolvedValueOnce({ choices: [{ message: { tool_calls: [{ id: "x", type: "function", function: { name: "ask_next_question", arguments: '{"type":"bogus"}' } }] } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { tool_calls: [{ id: "y", type: "function", function: { name: "ask_next_question", arguments: '{"type":"true_false","statement":"I love nature"}' } }] } }] });
+    vi.doMock("@/lib/llm/openrouter", () => ({
+      openrouter: () => ({ chat: { completions: { create } } }),
+      modelForQuestion: () => "test/model-question",
+      modelForAsk: () => "test/model-ask",
       withRetry: <T>(fn: () => Promise<T>) => fn(),
     }));
     const { askNextQuestion } = await import("@/lib/llm/build-loop");
@@ -65,16 +68,16 @@ describe("askNextQuestion", () => {
 describe("updateProfile", () => {
   it("applies set_structured_field and add_observation tool calls", async () => {
     const create = vi.fn().mockResolvedValue({
-      stop_reason: "tool_use",
-      content: [
-        { type: "tool_use", name: "set_structured_field", input: { field: "partyComposition", value: "couple" } },
-        { type: "tool_use", name: "add_observation", input: { note: "Loves coastal towns.", category: "preference" } },
-        { type: "tool_use", name: "note_signal", input: { kind: "coverage_good" } },
-      ],
+      choices: [{ message: { tool_calls: [
+        { id: "a", type: "function", function: { name: "set_structured_field", arguments: '{"field":"partyComposition","value":"couple"}' } },
+        { id: "b", type: "function", function: { name: "add_observation", arguments: '{"note":"Loves coastal towns.","category":"preference"}' } },
+        { id: "c", type: "function", function: { name: "note_signal", arguments: '{"kind":"coverage_good"}' } },
+      ] } }],
     });
-    vi.doMock("@/lib/llm/anthropic", () => ({
-      anthropic: () => ({ messages: { create } }),
-      MODELS: { question: "claude-haiku-4-5", ask: "claude-sonnet-4-6" },
+    vi.doMock("@/lib/llm/openrouter", () => ({
+      openrouter: () => ({ chat: { completions: { create } } }),
+      modelForQuestion: () => "test/model-question",
+      modelForAsk: () => "test/model-ask",
       withRetry: <T>(fn: () => Promise<T>) => fn(),
     }));
     const { updateProfile } = await import("@/lib/llm/build-loop");

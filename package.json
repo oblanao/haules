@@ -15,12 +15,12 @@
     "db:migrate": "tsx src/lib/db/migrate.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.95.1",
     "@node-rs/argon2": "^2.0.2",
     "drizzle-orm": "^0.45.2",
     "iron-session": "^8.0.4",
     "lucide-react": "^1.14.0",
     "next": "^15.5.18",
+    "openai": "^6.37.0",
     "postgres": "^3.4.9",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
