@@ -2,6 +2,18 @@ import { vi } from "vitest";
 
 type CookieJar = Map<string, string>;
 
+// Module-level mutable reference so the vi.mock factory (which is hoisted) can
+// read the current jar at call-time rather than capture-time.
+let _activeJar: CookieJar | null = null;
+
+vi.mock("next/headers", () => ({
+  cookies: async () => ({
+    get: (n: string) => (_activeJar?.has(n) ? { name: n, value: _activeJar.get(n) } : undefined),
+    set: (n: string, v: string) => { _activeJar?.set(n, v); },
+    delete: (n: string) => { _activeJar?.delete(n); },
+  }),
+}));
+
 export function makeRequest(url: string, init: RequestInit = {}, jar?: CookieJar): Request {
   const headers = new Headers(init.headers);
   if (jar && jar.size > 0) {
@@ -26,16 +38,7 @@ export function setCookie(jar: CookieJar, name: string, value: string) {
   jar.set(name, value);
 }
 
+// Sets the active jar that the hoisted vi.mock reads at call-time.
 export function withCookieJar(jar: CookieJar) {
-  vi.mock("next/headers", () => ({
-    cookies: async () => ({
-      get: (n: string) => (jar.has(n) ? { name: n, value: jar.get(n) } : undefined),
-      set: (n: string, v: string) => {
-        jar.set(n, v);
-      },
-      delete: (n: string) => {
-        jar.delete(n);
-      },
-    }),
-  }));
+  _activeJar = jar;
 }
