@@ -122,21 +122,42 @@ export async function askNextQuestion(userId: string): Promise<QuestionPayload> 
         { role: "user", content: userBlock },
       ],
     }));
+    console.error("[askNextQuestion attempt=" + attempt + "] raw response:",
+      JSON.stringify({
+        finish_reason: res.choices[0]?.finish_reason,
+        message_content: res.choices[0]?.message?.content,
+        tool_calls: res.choices[0]?.message?.tool_calls,
+      }));
     const toolCall = res.choices[0]?.message?.tool_calls?.[0];
-    if (!toolCall || toolCall.type !== "function" || toolCall.function.name !== "ask_next_question") continue;
+    if (!toolCall || toolCall.type !== "function" || toolCall.function.name !== "ask_next_question") {
+      console.error("[askNextQuestion] no usable tool_call, will retry/fallback");
+      continue;
+    }
     let input: unknown;
-    try { input = JSON.parse(toolCall.function.arguments); } catch { continue; }
+    try {
+      input = typeof toolCall.function.arguments === "string"
+        ? JSON.parse(toolCall.function.arguments)
+        : toolCall.function.arguments;
+    } catch (e) {
+      console.error("[askNextQuestion] JSON.parse failed:", (e as Error).message, "arguments:", toolCall.function.arguments);
+      continue;
+    }
     const parsed = QuestionPayloadSchema.safeParse(input);
-    if (!parsed.success) continue;
+    if (!parsed.success) {
+      console.error("[askNextQuestion] zod validation failed:", JSON.stringify(parsed.error.issues), "input:", JSON.stringify(input));
+      continue;
+    }
 
     const candidateText = "prompt" in parsed.data ? parsed.data.prompt : parsed.data.statement;
     if (isDuplicate(candidateText, recents)) {
+      console.error("[askNextQuestion] duplicate detected:", candidateText);
       userBlock = buildUserBlock(`5. Your previous attempt was: "${candidateText}". That is a duplicate / paraphrase of a question already in the list. Pick a COMPLETELY different topic.`);
       continue;
     }
     return parsed.data;
   }
 
+  console.error("[askNextQuestion] all 3 attempts failed, using hardcoded fallback");
   const used = new Set(recents.map((r) => normalizeQuestion(r.q)));
   return FALLBACK_QUESTIONS.find((q) => !used.has(normalizeQuestion("prompt" in q ? q.prompt : q.statement))) ?? FALLBACK_QUESTIONS[0];
 }
