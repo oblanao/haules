@@ -61,22 +61,60 @@ async function recentInteractions(userId: string, n = 10) {
     .orderBy(desc(schema.interactions.askedAt)).limit(n);
 }
 
+function normalizeQuestion(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function isDuplicate(candidate: string, recents: { q: string }[]): boolean {
+  const c = normalizeQuestion(candidate);
+  if (c.length === 0) return false;
+  return recents.some((r) => {
+    const n = normalizeQuestion(r.q);
+    return n === c || n.includes(c) || c.includes(n);
+  });
+}
+
+const FALLBACK_QUESTIONS: QuestionPayload[] = [
+  { type: "this_or_that", prompt: "Pick the trip that excites you more:", a: { label: "Two weeks roadtripping the Scottish Highlands", subtitle: "Castles, lochs, slow drives, single malts." }, b: { label: "Two weeks island-hopping in the Philippines", subtitle: "Boats, snorkeling, beach huts, fresh fish." } },
+  { type: "slider", prompt: "How much planning vs. spontaneity feels right on a trip?", min: 0, max: 5, min_label: "fully spontaneous", max_label: "every hour planned" },
+  { type: "free_text", prompt: "Describe the best meal you've ever had on a trip — where, what, who with." },
+  { type: "multi_select", prompt: "Which of these would make you say 'this trip was a win'?", options: ["A view I won't forget", "A new skill learned", "Deep rest", "A great story to tell", "Made a new friend", "Tried something scary"] },
+  { type: "true_false", statement: "I'd rather see one place deeply than three places superficially." },
+];
+
 export async function askNextQuestion(userId: string): Promise<QuestionPayload> {
   const profile = await loadProfileForRender(userId);
   const recents = await recentInteractions(userId);
-  const userBlock = [
-    renderProfile(profile),
-    "",
-    "## Recent questions (avoid duplicates / near-duplicates)",
-    recents.length === 0 ? "(none yet)" : recents.map((r, i) => `${i + 1}. [${r.t}] ${r.q} → ${JSON.stringify(r.a)}`).join("\n"),
-    "",
-    "Now call ask_next_question with the single best next question.",
-  ].join("\n");
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  function buildUserBlock(extraInstruction: string): string {
+    return [
+      renderProfile(profile),
+      "",
+      "## Recent questions you have already asked this traveler",
+      recents.length === 0 ? "(none yet)" : recents.map((r, i) => {
+        const skipped = typeof r.a === "object" && r.a !== null && "skipped" in (r.a as Record<string, unknown>);
+        const summary = skipped ? "(skipped — sensitive or low interest; do NOT re-ask this topic)" : JSON.stringify(r.a);
+        return `${i + 1}. [${r.t}] ${r.q} → ${summary}`;
+      }).join("\n"),
+      "",
+      "## HARD RULES (read carefully)",
+      "1. The next question MUST be substantively different in topic AND wording from EVERY question listed above.",
+      "2. Do NOT paraphrase, narrow, or broaden any previous question. Pick a new topic.",
+      "3. If a previous question was skipped, do NOT revisit that topic for several turns.",
+      "4. Vary the question_type across turns — don't pick the same type twice in a row.",
+      extraInstruction,
+      "",
+      "Now call ask_next_question.",
+    ].join("\n");
+  }
+
+  let userBlock = buildUserBlock("");
+
+  for (let attempt = 0; attempt < 3; attempt++) {
     const res = await withRetry(() => openrouter().chat.completions.create({
       model: modelForQuestion(),
       max_tokens: 600,
+      temperature: 0.8,
       tools: [ASK_NEXT_TOOL],
       tool_choice: { type: "function", function: { name: "ask_next_question" } },
       messages: [
@@ -89,9 +127,18 @@ export async function askNextQuestion(userId: string): Promise<QuestionPayload> 
     let input: unknown;
     try { input = JSON.parse(toolCall.function.arguments); } catch { continue; }
     const parsed = QuestionPayloadSchema.safeParse(input);
-    if (parsed.success) return parsed.data;
+    if (!parsed.success) continue;
+
+    const candidateText = "prompt" in parsed.data ? parsed.data.prompt : parsed.data.statement;
+    if (isDuplicate(candidateText, recents)) {
+      userBlock = buildUserBlock(`5. Your previous attempt was: "${candidateText}". That is a duplicate / paraphrase of a question already in the list. Pick a COMPLETELY different topic.`);
+      continue;
+    }
+    return parsed.data;
   }
-  return { type: "free_text", prompt: "What's the most surprising thing you've ever done on a trip?" };
+
+  const used = new Set(recents.map((r) => normalizeQuestion(r.q)));
+  return FALLBACK_QUESTIONS.find((q) => !used.has(normalizeQuestion("prompt" in q ? q.prompt : q.statement))) ?? FALLBACK_QUESTIONS[0];
 }
 
 const STRUCTURED_KEYS = ["partyComposition","budgetPerDayUsd","maxFlightHours","mobility","climatePreference","dietary","hardBlockers","foodAdventurousness","pace","preferredSeasons"] as const;
