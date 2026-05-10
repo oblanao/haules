@@ -6,46 +6,148 @@ import { QuestionPayloadSchema, type QuestionPayload, type AnswerPayload } from 
 
 const SYSTEM_PROMPT = `You are Haules, a thoughtful travel concierge interviewing a traveler to build their preference profile.
 
-Your job each turn is to call the ask_next_question tool with ONE question. Pick the most useful next question based on:
+Your job each turn is to call EXACTLY ONE of the ask_* tools to ask the traveler one question. Pick the question based on:
 - Gaps in their structured profile (party composition, budget, mobility, climate, dietary, pace, etc.)
 - Threads worth pulling on from their observations
 - Variety: do not repeat any question similar to one of the recent questions
 - When coverage_signals >= 3, prefer weirder/hypothetical questions over basics
 
-Choose the question type that fits the question:
-- free_text for narrative / open replies
-- choose_one for 3-6 mutually exclusive concrete options
-- this_or_that for binary visual comparisons (use it!)
-- true_false for sharp belief statements
-- slider for graded preferences (0-5 or 0-10)
-- multi_select for "pick all that apply"
-- rank for prioritization
-- number for precise inputs (budget, hours, etc.)
+Available tools (one per question shape) — pick the one that best fits the question you want to ask:
+- ask_free_text — narrative / open replies
+- ask_choose_one — 3-6 mutually exclusive concrete options
+- ask_this_or_that — binary visual comparisons (use this generously)
+- ask_true_false — sharp belief statements
+- ask_slider — graded preferences (0-5 or 0-10)
+- ask_multi_select — "pick all that apply"
+- ask_rank — prioritization
+- ask_number — precise inputs (budget, hours, etc.)
 
-Always respond with ONE tool call. Never reply in plain text.`;
+Always call exactly one tool. Never reply in plain text.`;
 
-const ASK_NEXT_TOOL = {
-  type: "function" as const,
-  function: {
-    name: "ask_next_question",
-    description: "Ask the traveler exactly one question.",
-    parameters: {
-      type: "object",
-      oneOf: [
-        { properties: { type: { const: "free_text" }, prompt: { type: "string" } }, required: ["type","prompt"] },
-        { properties: { type: { const: "choose_one" }, prompt: { type: "string" }, options: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 6 } }, required: ["type","prompt","options"] },
-        { properties: { type: { const: "this_or_that" }, prompt: { type: "string" },
-          a: { type: "object", properties: { label: { type: "string" }, subtitle: { type: "string" } }, required: ["label","subtitle"] },
-          b: { type: "object", properties: { label: { type: "string" }, subtitle: { type: "string" } }, required: ["label","subtitle"] } },
-          required: ["type","prompt","a","b"] },
-        { properties: { type: { const: "true_false" }, statement: { type: "string" } }, required: ["type","statement"] },
-        { properties: { type: { const: "slider" }, prompt: { type: "string" }, min: { type: "integer" }, max: { type: "integer" }, min_label: { type: "string" }, max_label: { type: "string" } }, required: ["type","prompt","min","max","min_label","max_label"] },
-        { properties: { type: { const: "multi_select" }, prompt: { type: "string" }, options: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 10 } }, required: ["type","prompt","options"] },
-        { properties: { type: { const: "rank" }, prompt: { type: "string" }, items: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 6 } }, required: ["type","prompt","items"] },
-        { properties: { type: { const: "number" }, prompt: { type: "string" }, unit: { type: "string" }, min: { type: "number" }, max: { type: "number" } }, required: ["type","prompt","unit"] },
-      ],
+const QUESTION_TOOLS = [
+  {
+    type: "function" as const,
+    function: {
+      name: "ask_free_text",
+      description: "Ask an open-ended question with a free-text answer (e.g. 'What's your best vacation memory?').",
+      parameters: { type: "object", properties: { prompt: { type: "string" } }, required: ["prompt"], additionalProperties: false },
     },
   },
+  {
+    type: "function" as const,
+    function: {
+      name: "ask_choose_one",
+      description: "Present 3-6 mutually exclusive options. Use for concrete picks like 'Which of these beaches looks prettiest?'",
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: { type: "string" },
+          options: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 6 },
+        },
+        required: ["prompt", "options"], additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "ask_this_or_that",
+      description: "Present two specific options A and B for a binary visual comparison. Use this generously — it produces engaging, contextual questions.",
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: { type: "string" },
+          a: { type: "object", properties: { label: { type: "string" }, subtitle: { type: "string" } }, required: ["label", "subtitle"], additionalProperties: false },
+          b: { type: "object", properties: { label: { type: "string" }, subtitle: { type: "string" } }, required: ["label", "subtitle"], additionalProperties: false },
+        },
+        required: ["prompt", "a", "b"], additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "ask_true_false",
+      description: "Present a sharp belief statement for the traveler to agree or disagree with (e.g. 'I love nature.').",
+      parameters: { type: "object", properties: { statement: { type: "string" } }, required: ["statement"], additionalProperties: false },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "ask_slider",
+      description: "Ask for a graded preference on a numeric scale (e.g. 'How much does food matter on a trip?' 0-5).",
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: { type: "string" },
+          min: { type: "integer" },
+          max: { type: "integer" },
+          min_label: { type: "string" },
+          max_label: { type: "string" },
+        },
+        required: ["prompt", "min", "max", "min_label", "max_label"], additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "ask_multi_select",
+      description: "Ask the traveler to pick all that apply from 3-10 options (e.g. 'Which activities have you enjoyed?').",
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: { type: "string" },
+          options: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 10 },
+        },
+        required: ["prompt", "options"], additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "ask_rank",
+      description: "Ask the traveler to rank 3-6 items in order of preference.",
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: { type: "string" },
+          items: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 6 },
+        },
+        required: ["prompt", "items"], additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "ask_number",
+      description: "Ask for a precise numeric answer with a unit (e.g. 'What's your typical daily budget?' unit='USD').",
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: { type: "string" },
+          unit: { type: "string" },
+          min: { type: "number" },
+          max: { type: "number" },
+        },
+        required: ["prompt", "unit"], additionalProperties: false,
+      },
+    },
+  },
+];
+
+const TOOL_NAME_TO_TYPE: Record<string, string> = {
+  ask_free_text: "free_text",
+  ask_choose_one: "choose_one",
+  ask_this_or_that: "this_or_that",
+  ask_true_false: "true_false",
+  ask_slider: "slider",
+  ask_multi_select: "multi_select",
+  ask_rank: "rank",
+  ask_number: "number",
 };
 
 async function loadProfileForRender(userId: string) {
@@ -115,43 +217,46 @@ export async function askNextQuestion(userId: string): Promise<QuestionPayload> 
       model: modelForQuestion(),
       max_tokens: 600,
       temperature: 0.8,
-      tools: [ASK_NEXT_TOOL],
-      tool_choice: { type: "function", function: { name: "ask_next_question" } },
+      tools: QUESTION_TOOLS,
+      tool_choice: "required",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: userBlock },
       ],
     }));
-    console.error("[askNextQuestion attempt=" + attempt + "] raw response:",
-      JSON.stringify({
-        finish_reason: res.choices[0]?.finish_reason,
-        message_content: res.choices[0]?.message?.content,
-        tool_calls: res.choices[0]?.message?.tool_calls,
-      }));
     const toolCall = res.choices[0]?.message?.tool_calls?.[0];
-    if (!toolCall || toolCall.type !== "function" || toolCall.function.name !== "ask_next_question") {
-      console.error("[askNextQuestion] no usable tool_call, will retry/fallback");
+    if (!toolCall || toolCall.type !== "function") {
+      console.error("[askNextQuestion attempt=" + attempt + "] no tool_call returned. finish_reason:",
+        res.choices[0]?.finish_reason, "content:", res.choices[0]?.message?.content);
       continue;
     }
-    let input: unknown;
+    const type = TOOL_NAME_TO_TYPE[toolCall.function.name];
+    if (!type) {
+      console.error("[askNextQuestion attempt=" + attempt + "] unknown tool name:", toolCall.function.name);
+      continue;
+    }
+    let args: unknown;
     try {
-      input = typeof toolCall.function.arguments === "string"
+      args = typeof toolCall.function.arguments === "string"
         ? JSON.parse(toolCall.function.arguments)
         : toolCall.function.arguments;
     } catch (e) {
-      console.error("[askNextQuestion] JSON.parse failed:", (e as Error).message, "arguments:", toolCall.function.arguments);
+      console.error("[askNextQuestion attempt=" + attempt + "] JSON.parse failed:",
+        (e as Error).message, "raw:", toolCall.function.arguments);
       continue;
     }
-    const parsed = QuestionPayloadSchema.safeParse(input);
+    const candidate = { type, ...(args as Record<string, unknown>) };
+    const parsed = QuestionPayloadSchema.safeParse(candidate);
     if (!parsed.success) {
-      console.error("[askNextQuestion] zod validation failed:", JSON.stringify(parsed.error.issues), "input:", JSON.stringify(input));
+      console.error("[askNextQuestion attempt=" + attempt + "] zod failed:",
+        JSON.stringify(parsed.error.issues), "candidate:", JSON.stringify(candidate));
       continue;
     }
 
     const candidateText = "prompt" in parsed.data ? parsed.data.prompt : parsed.data.statement;
     if (isDuplicate(candidateText, recents)) {
-      console.error("[askNextQuestion] duplicate detected:", candidateText);
-      userBlock = buildUserBlock(`5. Your previous attempt was: "${candidateText}". That is a duplicate / paraphrase of a question already in the list. Pick a COMPLETELY different topic.`);
+      console.error("[askNextQuestion attempt=" + attempt + "] duplicate:", candidateText);
+      userBlock = buildUserBlock(`5. Your previous attempt was: "${candidateText}". That duplicates / paraphrases a question already asked. Pick a COMPLETELY different topic.`);
       continue;
     }
     return parsed.data;

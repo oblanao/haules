@@ -29,9 +29,9 @@ async function makeUser() {
 }
 
 describe("askNextQuestion", () => {
-  it("returns a parsed question payload from a tool_use response", async () => {
+  it("returns a parsed question payload from an ask_free_text tool call", async () => {
     const create = vi.fn().mockResolvedValue({
-      choices: [{ message: { tool_calls: [{ id: "x", type: "function", function: { name: "ask_next_question", arguments: '{"type":"free_text","prompt":"Best memory?"}' } }] } }],
+      choices: [{ message: { tool_calls: [{ id: "x", type: "function", function: { name: "ask_free_text", arguments: '{"prompt":"Best memory?"}' } }] } }],
     });
     vi.doMock("@/lib/llm/openrouter", () => ({
       openrouter: () => ({ chat: { completions: { create } } }),
@@ -47,10 +47,26 @@ describe("askNextQuestion", () => {
     expect(create).toHaveBeenCalled();
   });
 
-  it("retries once on a malformed payload before returning valid result", async () => {
+  it("derives type from tool name and parses each ask_* variant", async () => {
+    const create = vi.fn().mockResolvedValue({
+      choices: [{ message: { tool_calls: [{ id: "x", type: "function", function: { name: "ask_true_false", arguments: '{"statement":"I love nature"}' } }] } }],
+    });
+    vi.doMock("@/lib/llm/openrouter", () => ({
+      openrouter: () => ({ chat: { completions: { create } } }),
+      modelForQuestion: () => "test/model-question",
+      modelForAsk: () => "test/model-ask",
+      withRetry: <T>(fn: () => Promise<T>) => fn(),
+    }));
+    const { askNextQuestion } = await import("@/lib/llm/build-loop");
+    const uid = await makeUser();
+    const q = await askNextQuestion(uid);
+    expect(q).toEqual({ type: "true_false", statement: "I love nature" });
+  });
+
+  it("retries on an unknown tool name before returning a valid result", async () => {
     const create = vi.fn()
-      .mockResolvedValueOnce({ choices: [{ message: { tool_calls: [{ id: "x", type: "function", function: { name: "ask_next_question", arguments: '{"type":"bogus"}' } }] } }] })
-      .mockResolvedValueOnce({ choices: [{ message: { tool_calls: [{ id: "y", type: "function", function: { name: "ask_next_question", arguments: '{"type":"true_false","statement":"I love nature"}' } }] } }] });
+      .mockResolvedValueOnce({ choices: [{ message: { tool_calls: [{ id: "x", type: "function", function: { name: "ask_bogus", arguments: '{}' } }] } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { tool_calls: [{ id: "y", type: "function", function: { name: "ask_true_false", arguments: '{"statement":"I love nature"}' } }] } }] });
     vi.doMock("@/lib/llm/openrouter", () => ({
       openrouter: () => ({ chat: { completions: { create } } }),
       modelForQuestion: () => "test/model-question",
@@ -62,6 +78,23 @@ describe("askNextQuestion", () => {
     const q = await askNextQuestion(uid);
     expect(q.type).toBe("true_false");
     expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to a hardcoded question when LLM returns empty args (the Gemini oneOf bug)", async () => {
+    const create = vi.fn().mockResolvedValue({
+      choices: [{ message: { tool_calls: [{ id: "x", type: "function", function: { name: "ask_free_text", arguments: '{}' } }] } }],
+    });
+    vi.doMock("@/lib/llm/openrouter", () => ({
+      openrouter: () => ({ chat: { completions: { create } } }),
+      modelForQuestion: () => "test/model-question",
+      modelForAsk: () => "test/model-ask",
+      withRetry: <T>(fn: () => Promise<T>) => fn(),
+    }));
+    const { askNextQuestion } = await import("@/lib/llm/build-loop");
+    const uid = await makeUser();
+    const q = await askNextQuestion(uid);
+    expect(["free_text", "this_or_that", "slider", "multi_select", "true_false"]).toContain(q.type);
+    expect(create).toHaveBeenCalledTimes(3);
   });
 });
 
