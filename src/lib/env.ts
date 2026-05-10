@@ -9,6 +9,7 @@ const envSchema = z.object({
   RATE_LIMIT_QUESTIONS_PER_DAY: z.coerce.number().int().positive().default(200),
   RATE_LIMIT_CHAT_MESSAGES_PER_DAY: z.coerce.number().int().positive().default(100),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  COOKIE_SECURE: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
 });
 
 export type Env = z.infer<typeof envSchema>;

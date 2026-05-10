@@ -5,6 +5,7 @@ import { cookies } from "next/headers";
 import { db, schema } from "@/lib/db/client";
 import { verifyPassword } from "@/lib/auth/argon";
 import { createSession, SESSION_COOKIE_NAME } from "@/lib/auth/session";
+import { env } from "@/lib/env";
 
 const Body = z.object({
   email: z.string().email().toLowerCase().trim(),
@@ -22,7 +23,7 @@ export async function POST(req: Request) {
   }
   const sid = await createSession(user.id);
   (await cookies()).set(SESSION_COOKIE_NAME, sid, {
-    httpOnly: true, secure: process.env.NODE_ENV === "production",
+    httpOnly: true, secure: env().COOKIE_SECURE,
     sameSite: "lax", path: "/", maxAge: 30 * 24 * 60 * 60,
   });
   return NextResponse.json({ ok: true });
