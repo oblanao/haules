@@ -25,10 +25,20 @@ export async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<
     try { return await fn(); }
     catch (e) {
       lastErr = e;
+      logOpenRouterError(e);
       const status = (e as { status?: number }).status ?? 0;
       if (status && status < 500 && status !== 429) throw e;
       await new Promise((r) => setTimeout(r, 250 * 2 ** i));
     }
   }
   throw lastErr;
+}
+
+function logOpenRouterError(e: unknown): void {
+  const err = e as { status?: number; message?: string; error?: unknown };
+  console.error("[openrouter] request failed", {
+    status: err.status,
+    message: err.message,
+    body: err.error,
+  });
 }
